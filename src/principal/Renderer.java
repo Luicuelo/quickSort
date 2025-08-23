@@ -13,7 +13,8 @@ import java.util.Queue;
 /**
  * Renderer class for visualizing QuickSort algorithm operations.
  * <p>
- * This class handles the graphical representation of sorting operations including:
+ * This class handles the graphical representation of sorting operations
+ * including:
  * - Drawing array elements as colored bars
  * - Animating swap operations with blinking effects
  * - Highlighting pivot elements during partitioning
@@ -23,35 +24,45 @@ import java.util.Queue;
  */
 class Renderer {
     /**
-     * Action class represents a single animation operation in the QuickSort visualization.
-     * Each action has an instruction type, parameters, and manages its own animation stages.
+     * Action class represents a single animation operation in the QuickSort
+     * visualization.
+     * Each action has an instruction type, parameters, and manages its own
+     * animation stages.
      */
     protected static class Action {
-        /** The type of operation (SWAP or PIVOT) */
-        private final int instruction;
+
         /** First parameter (typically an array index) */
         private final int param1;
         /** Second parameter (typically another array index for swaps) */
         private final int param2;
         /** Current animation stage counter */
         private int stage;
+        private int totalStages;
+
         /** Constant for swap operation */
-        public static final int SWAP = 0;
-        /** Constant for pivot highlighting operation */
-        public static final int PIVOT = 1;
+        public static enum Operations {
+            SWAP,
+            PIVOT,
+            COMPARE
+        }
+
+        /** The type of operation */
+        private final Operations instruction;
 
         /**
          * Creates a new action for the animation queue.
          * 
          * @param instruction the type of operation (SWAP or PIVOT)
-         * @param param1 first parameter (array index)
-         * @param param2 second parameter (array index for swaps, unused for pivots)
+         * @param param1      first parameter (array index)
+         * @param param2      second parameter (array index for swaps, unused for
+         *                    pivots)
          */
-        public Action(int instruction, int param1, int param2) {
+        public Action(Operations instruction, int param1, int param2) {
             this.instruction = instruction;
             this.param1 = param1;
             this.param2 = param2;
-            this.stage = getInstructionStageNumber();
+            this.totalStages=getInstructionStageNumber();
+            this.stage = totalStages;
         }
 
         /**
@@ -61,27 +72,15 @@ class Renderer {
          */
         private int getInstructionStageNumber() {
             return switch (instruction) {
-                case SWAP -> 9;  // 9 stages for blinking animation + final swap
-                case PIVOT -> 8; // 8 stages for pivot highlighting
+                case SWAP ->10;
+                case PIVOT -> 2;
+                case COMPARE -> 2;
                 default -> 0;
             };
         }
 
-        /**
-         * Gets the human-readable name of this instruction.
-         * 
-         * @return instruction name as string
-         */
-        public String getInstructionName() {
-            return switch (instruction) {
-                case SWAP -> "Swap";
-                case PIVOT -> "Pivot";
-                default -> "unknown";
-            };
-        }
-
         /** @return the instruction type */
-        public int getInstruction() {
+        public Operations getInstruction() {
             return instruction;
         }
 
@@ -100,7 +99,7 @@ class Renderer {
          * 
          * @return true if the animation is complete, false if more stages remain
          */
-        public boolean runStage() {
+        public boolean endStage() {
             stage--;
             return stage <= 0;
         }
@@ -108,6 +107,11 @@ class Renderer {
         /** @return the current stage number */
         public int getStage() {
             return stage;
+        }
+
+    /** @return totalStages number */
+        public int getTotalStages(){
+            return totalStages;
         }
 
     }
@@ -139,7 +143,7 @@ class Renderer {
     private final WritableImage estadosImage;
     /** Pixel writer for direct pixel access */
     private final PixelWriter pixelWriter;
-    
+
     /** Flag to control whether sound is enabled during visualization */
     private final boolean soundEnabled;
 
@@ -153,12 +157,12 @@ class Renderer {
     /**
      * Creates a new Renderer for QuickSort visualization.
      * 
-     * @param gc the graphics context to draw on (must not be null)
-     * @param w canvas width in pixels (must be positive)
-     * @param h canvas height in pixels (must be positive)
-     * @param barsColor color for drawing the array bars
+     * @param gc              the graphics context to draw on (must not be null)
+     * @param w               canvas width in pixels (must be positive)
+     * @param h               canvas height in pixels (must be positive)
+     * @param barsColor       color for drawing the array bars
      * @param backGroundColor color for the background
-     * @param soundEnabled whether sound is enabled for audio feedback
+     * @param soundEnabled    whether sound is enabled for audio feedback
      * @throws IllegalArgumentException if gc is null or dimensions are invalid
      */
     public Renderer(GraphicsContext gc, int w, int h, Color barsColor, Color backGroundColor, boolean soundEnabled) {
@@ -185,9 +189,9 @@ class Renderer {
 
     }
 
-    protected void  copyRenderArrayOfValues(int[] ArrayOfValues){
-        for(int i = 0; i < ArrayOfValues.length; i++){
-            ArrayOfValues[i]= renderArrayOfValues[i] ;
+    protected void copyRenderArrayOfValues(int[] ArrayOfValues) {
+        for (int i = 0; i < ArrayOfValues.length; i++) {
+            ArrayOfValues[i] = renderArrayOfValues[i];
         }
     }
 
@@ -226,11 +230,14 @@ class Renderer {
         Action action = actionQueue.peek();
         boolean finished = false;
         switch (action.getInstruction()) {
-            case Action.SWAP:
+            case SWAP:
                 finished = swap(action);
                 break;
-            case Action.PIVOT:
+            case PIVOT:
                 finished = pivot(action);
+                break;
+            case COMPARE:
+                finished = compare(action);
                 break;
             default:
                 break;
@@ -248,49 +255,52 @@ class Renderer {
      * @return true if the animation is complete, false otherwise
      */
     private boolean swap(Action action) {
-
-        int stage = action.getStage();
-        Color color;
-
-
-
-        switch (stage) {
-            case 9, 7, 5, 3: // Blink with semi-transparent color (even stages)
-                color = lightColor(defaultColor);
-                break;
-            case 8, 6, 4, 2: // Blink with normal color (odd stages)
-                color = defaultColor;
-                break;
-            case 1: // Final stage - perform the actual swap
-                // Swap elements in the array
-                int temp = renderArrayOfValues[action.getParam1()];
-                renderArrayOfValues[action.getParam1()] = renderArrayOfValues[action.getParam2()];
-                renderArrayOfValues[action.getParam2()] = temp;
-                color = defaultColor;
-
-                // Play sound based on distance between elements
-                int distance = Math.abs(action.getParam2() - action.getParam1());
-                playSwapSound(distance);
-
-                break;
-            default:
-                color = defaultColor;
+        // Calculate color based on current stage
+        Color color = calculateStageColor(action.getTotalStages(), action.getStage(), defaultColor);
+        
+        // Perform the actual swap at the midpoint of animation
+        if (action.getStage() == action.getTotalStages() / 2) {
+            int temp = renderArrayOfValues[action.getParam1()];
+            renderArrayOfValues[action.getParam1()] = renderArrayOfValues[action.getParam2()];
+            renderArrayOfValues[action.getParam2()] = temp;
+            // Play sound based on distance between elements
+            int distance = Math.abs(action.getParam2() - action.getParam1());
+            playSwapSound(distance);
+            // Draw both elements that will be swapped
+            clearRectangle(action.getParam1(), 0, 1, cellHeight - 1);
+            clearRectangle(action.getParam2(), 0, 1, cellHeight - 1);
         }
 
-        
-        // Draw both elements that will be swapped     
-        clearRectangle(action.getParam1(), 0, 1, cellHeight);
+
         rectangleToScreen(action.getParam1(), (height / PIXEL_SIZE) -
-                renderArrayOfValues[action.getParam1()], 1,
+                renderArrayOfValues[action.getParam1()] - 1, 1,
                 renderArrayOfValues[action.getParam1()], true, true, color);
 
-        clearRectangle(action.getParam2(), 0, 1, cellHeight);
+
         rectangleToScreen(action.getParam2(), (height / PIXEL_SIZE) -
-                renderArrayOfValues[action.getParam2()], 1,
+                renderArrayOfValues[action.getParam2()] - 1, 1,
                 renderArrayOfValues[action.getParam2()], true, true, color);
 
-        //System.out.println("Swapping " + action.getParam1() + " with " + action.getParam2() + " stage:" + stage);
-        return action.runStage();
+        // System.out.println("Swapping " + action.getParam1() + " with " +
+        // action.getParam2() + " stage:" + stage);
+        return action.endStage();
+    }
+
+
+    private boolean compare(Action action) {
+
+        // delete last triangles
+
+        for (int a = 0; a < cellWidth; a++) {
+            if (a != action.getParam1() && a != action.getParam2())
+                triangleToScreen(a, cellHeight - 1, Color.LIGHTBLUE);
+        }
+
+        if (action.getStage() > 1) {
+            triangleToScreen(action.getParam1(), cellHeight - 1, Color.DARKGREEN);
+            triangleToScreen(action.getParam2(), cellHeight - 1, Color.BLUE);
+        }
+        return action.endStage();
     }
 
     /**
@@ -307,33 +317,20 @@ class Renderer {
         } else
             color = invertedDefaultColor;
 
-        rectangleToScreen(action.param1, (height / Renderer.PIXEL_SIZE) - renderArrayOfValues[action.param1], 1,
+        rectangleToScreen(action.param1, (height / Renderer.PIXEL_SIZE) - renderArrayOfValues[action.param1] - 1, 1,
                 renderArrayOfValues[action.param1], true, true, color);
 
-        //System.out.println("Pivoting around " + action.getParam1() + " stage:" + stage);
-        return action.runStage();
-    }
-
-    /**
-     * Draws a rectangle to the screen using the default color.
-     * 
-     * @param x horizontal position in cells
-     * @param y vertical position in cells
-     * @param rwidth width in cells
-     * @param rheight height in cells
-     * @param hasFrame whether to draw a frame around the rectangle
-     * @param hasSpace whether to leave spacing around the rectangle
-     */
-    protected void rectangleToScreen(int x, int y, int rwidth, int rheight, boolean hasFrame, boolean hasSpace) {
-        rectangleToScreen(x, y, rwidth, rheight, hasFrame, hasSpace, defaultColor);
+        // System.out.println("Pivoting around " + action.getParam1() + " stage:" +
+        // stage);
+        return action.endStage();
     }
 
     /**
      * Clears a rectangular area by filling it with the background color.
      * 
-     * @param x horizontal position in cells
-     * @param y vertical position in cells
-     * @param rwidth width in cells
+     * @param x       horizontal position in cells
+     * @param y       vertical position in cells
+     * @param rwidth  width in cells
      * @param rheight height in cells
      */
     protected void clearRectangle(int x, int y, int rwidth, int rheight) {
@@ -364,15 +361,57 @@ class Renderer {
     }
 
     /**
-     * Draws a rectangle to the screen with specified color and styling options.
+     * Draws a small triangle marker within a PIXEL_SIZE cell.
+     * Used to indicate elements being compared during sorting visualization.
+     * The triangle is drawn as a pyramid shape pointing upward.
      * 
-     * @param x horizontal position in cells
-     * @param y vertical position in cells
-     * @param rwidth width in cells
-     * @param rheight height in cells
+     * @param x     horizontal position in cells
+     * @param y     vertical position in cells
+     * @param color color of the triangle marker
+     */
+    protected void triangleToScreen(int x, int y, Color color) {
+        if (x < 0 || x >= cellWidth || y < 0 || y >= cellHeight)
+            return;
+
+        int screenX = x * PIXEL_SIZE + PIXEL_SIZE / 2;
+        int screenY = y * PIXEL_SIZE;
+
+        int width = 0;
+        for (int row = 1; row < PIXEL_SIZE / 2; row++) {
+            width++;
+
+            for (int col = -width; col <= width; col++) {
+
+                pixelWriter.setColor(screenX + col, screenY + row, color);
+
+            }
+        }
+    }
+
+    /**
+     * Draws a rectangle to the screen using the default color.
+     * 
+     * @param x        horizontal position in cells
+     * @param y        vertical position in cells
+     * @param rwidth   width in cells
+     * @param rheight  height in cells
      * @param hasFrame whether to draw a frame around the rectangle
      * @param hasSpace whether to leave spacing around the rectangle
-     * @param color the color to use for drawing
+     */
+    protected void rectangleToScreen(int x, int y, int rwidth, int rheight, boolean hasFrame, boolean hasSpace) {
+        rectangleToScreen(x, y, rwidth, rheight, hasFrame, hasSpace, defaultColor);
+    }
+
+    /**
+     * Draws a rectangle to the screen with specified color and styling options.
+     * 
+     * @param x        horizontal position in cells
+     * @param y        vertical position in cells
+     * @param rwidth   width in cells
+     * @param rheight  height in cells
+     * @param hasFrame whether to draw a frame around the rectangle
+     * @param hasSpace whether to leave spacing around the rectangle
+     * @param color    the color to use for drawing
      */
     protected void rectangleToScreen(int x, int y, int rwidth, int rheight, boolean hasFrame, boolean hasSpace,
             Color color) {
@@ -402,19 +441,16 @@ class Renderer {
                     for (int px = startPx; px < endPx; px++) {
                         int pos = (py * PIXEL_SIZE + px) * 4;
 
-                        if (hasFrame &&
-                               ((leftBorder && px == startPx) ||
-                                (rightBorder && px == endPx - 1) ||
-                                (topBorder && py == startPy) ||
-                                (bottomBorder && py == endPy - 1)) 
-                        ) blockBuffer[pos + 3] = (byte) 255;
-                        else
-                        {
+                        if (!(hasFrame &&
+                                ((leftBorder && px == startPx) ||
+                                        (rightBorder && px == endPx - 1) ||
+                                        (topBorder && py == startPy) ||
+                                        (bottomBorder && py == endPy - 1)))) {
                             blockBuffer[pos] = (byte) (color.getBlue() * 255); // Blue - inner color
                             blockBuffer[pos + 1] = (byte) (color.getGreen() * 255); // Green
                             blockBuffer[pos + 2] = (byte) (color.getRed() * 255); // Red
-                            blockBuffer[pos + 3] = (byte) (color.getOpacity() * 255); // Red
-                        }                         
+                        }
+                        blockBuffer[pos + 3] = (byte) 255;
                     }
                 }
 
@@ -454,7 +490,8 @@ class Renderer {
 
     /**
      * Performs a single animation step.
-     * Useful for debugging or educational purposes to observe each operation individually.
+     * Useful for debugging or educational purposes to observe each operation
+     * individually.
      */
     public void step() {
         runningStep = true;
@@ -485,9 +522,74 @@ class Renderer {
     }
 
     /**
+     * Creates a darker version of the given color by blending with white.
+     * 
+     * @param color the original color
+     * @return a new color that is 50% lighter
+     */
+    private Color darkColor(Color color) {
+        double red = color.getRed() / 2;
+        double green = color.getGreen() / 2;
+        double blue = color.getBlue() / 2;
+
+        return new Color(red, green, blue, 1);
+    }
+
+    /**
+     * Calculates the color for a specific stage of animation based on total stages.
+     * Creates a pulse effect that darkens and then returns to normal.
+     * 
+     * @param totalStages the total number of stages in the animation
+     * @param currentStage the current stage of the animation
+     * @param baseColor the base color to modify
+     * @return the calculated color for this stage
+     */
+    private Color calculateStageColor(int totalStages, int currentStage, Color baseColor) {
+        // At the beginning or end of animation, return the default color
+        if (currentStage == totalStages || currentStage == 1) {
+            return baseColor;
+        }
+        
+        // Calculate the progress of the animation (0 to 1)
+        double progress = (double)(totalStages - currentStage) / totalStages;
+        
+        // Create a smooth transition that goes from 0 to 1 and back to 0
+        // This creates a pulse effect that darkens and then returns to normal
+        double pulseProgress;
+        if (progress <= 0.5) {
+            // First half: go from 0 to 1 (darken)
+            pulseProgress = progress * 2;
+        } else {
+            // Second half: go from 1 to 0 (lighten)
+            pulseProgress = (1 - progress) * 2;
+        }
+        
+        // Calculate color adjustment - darken bars during animation
+        double darkenFactor = 0.6 * pulseProgress; // Maximum 70% darkening
+        return new Color(
+            Math.max(0, baseColor.getRed() * (1 - darkenFactor)),
+            Math.max(0, baseColor.getGreen() * (1 - darkenFactor)),
+            Math.max(0, baseColor.getBlue() * (1 - darkenFactor)),
+            baseColor.getOpacity()
+        );
+    }
+
+    /**
+     * Animates a comparison operation between two array elements.
+     * Displays triangular markers below the elements being compared during sorting
+     * algorithms.
+     * Triangles persist until explicitly cleared by other operations.
+     *
+     * @param action the compare action containing the indices being compared
+     * @return true if the animation is complete, false otherwise
+     */
+
+    /**
      * Plays a sound based on the distance between swapped elements.
-     * Lower frequency (bass) for nearby elements, higher frequency for distant elements.
-     * The sound is only played if the sound feature is enabled in the main application.
+     * Lower frequency (bass) for nearby elements, higher frequency for distant
+     * elements.
+     * The sound is only played if the sound feature is enabled in the main
+     * application.
      *
      * @param distance the distance between the swapped elements
      */
@@ -496,7 +598,8 @@ class Renderer {
             return;
         }
         // Calculate frequency based on distance
-        // Bass sound (low frequency) for nearby elements, high pitch for distant elements
+        // Bass sound (low frequency) for nearby elements, high pitch for distant
+        // elements
         // Frequency range from 200Hz (nearby) to 800Hz (distant)
         int maxDistance = renderArrayOfValues != null ? renderArrayOfValues.length : 50;
         int frequency = 200 + (600 * Math.min(distance, maxDistance) / Math.max(maxDistance, 1));
@@ -510,7 +613,7 @@ class Renderer {
      * Implements smooth start and end to avoid clicking sounds.
      *
      * @param frequency the frequency of the tone in Hz
-     * @param duration the duration of the tone in milliseconds
+     * @param duration  the duration of the tone in milliseconds
      */
     private void generateTone(int frequency, int duration) {
         try {
@@ -522,11 +625,11 @@ class Renderer {
             // Generate sine wave samples with smooth start and end to avoid clicks
             for (int i = 0; i < buffer.length; i++) {
                 double angle = i / (8000f / frequency) * 2.0 * Math.PI;
-                
+
                 // Apply an envelope to reduce volume and avoid clicks at start/end
                 double envelope;
                 int fadeLength = Math.min(bufferSize / 7, 20); // 20 samples or 1/7th of buffer for fade
-                
+
                 if (i < fadeLength) {
                     // Fade in
                     envelope = (double) i / fadeLength;
@@ -537,7 +640,7 @@ class Renderer {
                     // Full volume in the middle
                     envelope = 1.0;
                 }
-                
+
                 // Reduce overall volume to make it less loud
                 buffer[i] = (byte) (Math.sin(angle) * 60 * envelope); // Reduced from 127 to 60
             }
