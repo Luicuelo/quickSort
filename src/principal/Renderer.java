@@ -43,7 +43,8 @@ class Renderer {
         public static enum Operations {
             SWAP,
             PIVOT,
-            COMPARE
+            COMPARE,
+            REFRESH_RANGE
         }
 
         /** The type of operation */
@@ -57,12 +58,25 @@ class Renderer {
          * @param param2      second parameter (array index for swaps, unused for
          *                    pivots)
          */
+        private int[] snapshotArray; // For REFRESH_RANGE to store array state
+        
         public Action(Operations instruction, int param1, int param2) {
             this.instruction = instruction;
             this.param1 = param1;
             this.param2 = param2;
             this.totalStages=getInstructionStageNumber();
             this.stage = totalStages;
+        }
+        
+        public Action(Operations instruction, int param1, int param2, int[] arraySnapshot) {
+            this(instruction, param1, param2);
+            if (arraySnapshot != null) {
+                this.snapshotArray = arraySnapshot.clone();
+            }
+        }
+        
+        public int[] getSnapshotArray() {
+            return snapshotArray;
         }
 
         /**
@@ -75,6 +89,7 @@ class Renderer {
                 case SWAP ->10;
                 case PIVOT -> 2;
                 case COMPARE -> 2;
+                case REFRESH_RANGE -> Math.max(1, param2 - param1 + 1); // One stage per bar
                 default -> 0;
             };
         }
@@ -196,6 +211,50 @@ class Renderer {
     }
 
     /**
+     * Updates the render array with values from the main sorting array.
+     * Used by refresh action to sync visualization with actual array state.
+     * 
+     * @param sourceArray the main array being sorted
+     */
+    protected void updateRenderArray(int[] sourceArray) {
+        System.arraycopy(sourceArray, 0, renderArrayOfValues, 0, renderArrayOfValues.length);
+    }
+
+    
+
+    /**
+     * Refreshes a specific range of the visualization one bar at a time.
+     * Updates and redraws bars from param1 to param2 indices progressively.
+     * 
+     * @param action the refresh range action with start and end indices
+     * @return true when refresh is complete
+     */
+    private boolean refreshRange(Action action) {
+        int start = action.getParam1();
+        int end = action.getParam2();
+        int currentIndex = start + (action.getTotalStages() - action.getStage());
+        
+        if (currentIndex <= end) {
+            // Update render array with new value first
+            renderArrayOfValues[currentIndex] = action.getSnapshotArray() != null ? 
+                action.getSnapshotArray()[currentIndex] : renderArrayOfValues[currentIndex];
+            
+            
+            // Clear and redraw the bar
+            clearRectangle(currentIndex, 0, 1, cellHeight - 1);
+            rectangleToScreen(currentIndex, (height / PIXEL_SIZE) - renderArrayOfValues[currentIndex] - 1, 1,
+                    renderArrayOfValues[currentIndex], true, true, defaultColor);
+            
+            // Play short high-pitched sound
+            if (soundEnabled && (end-start>2)) {                
+                  playSwapSound( (action.getTotalStages() - action.getStage()));
+            }
+        }
+        
+        return action.endStage();
+    }
+
+    /**
      * Clears the entire canvas and resets the image.
      * Sets all pixels to transparent and fills the background.
      */
@@ -238,6 +297,9 @@ class Renderer {
                 break;
             case COMPARE:
                 finished = compare(action);
+                break;
+            case REFRESH_RANGE:
+                finished = refreshRange(action);
                 break;
             default:
                 break;
@@ -317,11 +379,11 @@ class Renderer {
         } else
             color = invertedDefaultColor;
 
+        // Clear the rectangle first to avoid overlapping
+        clearRectangle(action.param1, 0, 1, cellHeight - 1);
         rectangleToScreen(action.param1, (height / Renderer.PIXEL_SIZE) - renderArrayOfValues[action.param1] - 1, 1,
                 renderArrayOfValues[action.param1], true, true, color);
 
-        // System.out.println("Pivoting around " + action.getParam1() + " stage:" +
-        // stage);
         return action.endStage();
     }
 

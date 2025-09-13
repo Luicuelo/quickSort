@@ -33,7 +33,8 @@ public class QuickSort extends Application {
 		QuickSort,
 		BubbleSort,
 		SelectionSort,
-		InsertionSort
+		InsertionSort,
+		MergeSort
 	}
 
 	private SortAlgorithm actualSortAlgorithm = SortAlgorithm.QuickSort;
@@ -276,6 +277,9 @@ public class QuickSort extends Application {
 			case InsertionSort:
 				insertionSort(0, arrayOfValuesToSort.length - 1);
 				break;
+			case MergeSort:
+				mergeSort(0, arrayOfValuesToSort.length - 1);
+				break;
 			default:
 				quickSort(0, arrayOfValuesToSort.length - 1);
 				break;
@@ -292,14 +296,14 @@ public class QuickSort extends Application {
 	 * @param ini index of the first element to swap
 	 * @param fin index of the second element to swap
 	 */
-	private void swap(int ini, int fin) {
+	private void swap(int i, int j) {
 		// Add the swap action to the renderer queue
-		Renderer.actionQueue.add(new Renderer.Action(Action.Operations.SWAP, ini, fin));
+		Renderer.actionQueue.add(new Renderer.Action(Action.Operations.SWAP, i, j));
 
 		// Perform the actual array swap
-		int temp = arrayOfValuesToSort[ini];
-		arrayOfValuesToSort[ini] = arrayOfValuesToSort[fin];
-		arrayOfValuesToSort[fin] = temp;
+		int temp = arrayOfValuesToSort[i];
+		arrayOfValuesToSort[i] = arrayOfValuesToSort[j];
+		arrayOfValuesToSort[j] = temp;
 	}
 
 	/**
@@ -414,7 +418,7 @@ public class QuickSort extends Application {
 			swapped = false;
 			// Compare adjacent elements
 			Renderer.actionQueue.add(new Renderer.Action(Action.Operations.PIVOT, i - 1, 0));
-			for (int j = ini; j < i ; j++) {
+			for (int j = ini; j < i; j++) {
 				Renderer.actionQueue.add(new Renderer.Action(Action.Operations.COMPARE, j, j + 1));
 				if (arrayOfValuesToSort[j] > arrayOfValuesToSort[j + 1]) {
 					swap(j, j + 1);
@@ -423,8 +427,76 @@ public class QuickSort extends Application {
 			}
 			// If no swapping occurred, array is sorted
 			if (!swapped)
-				break; 
+				break;
 		}
+	}
+
+	/**
+	 * Merges two sorted subarrays into a single sorted array.
+	 * Compares elements from both subarrays and arranges them in order,
+	 * using swaps to make the merge process visible in the animation.
+	 * 
+	 * @param ini starting index of the first subarray
+	 * @param mid ending index of the first subarray (mid+1 starts second subarray)
+	 * @param fin ending index of the second subarray
+	 */
+	private void merge(int ini, int mid, int fin) {
+		// Highlight the two subarrays being merged
+		Renderer.actionQueue.add(new Renderer.Action(Action.Operations.PIVOT, ini, 0));
+		Renderer.actionQueue.add(new Renderer.Action(Action.Operations.PIVOT, mid + 1, 0));
+		
+		int[] temp = new int[fin - ini + 1];
+		int i = ini, j = mid + 1, k = 0;
+
+		// Merge process with comparisons
+		while (i <= mid && j <= fin) {
+			Renderer.actionQueue.add(new Renderer.Action(Action.Operations.COMPARE, i, j));
+			if (arrayOfValuesToSort[i] <= arrayOfValuesToSort[j]) {
+				temp[k++] = arrayOfValuesToSort[i++];
+			} else {
+				temp[k++] = arrayOfValuesToSort[j++];
+			}
+		}
+
+		// Copy remaining elements
+		while (i <= mid) temp[k++] = arrayOfValuesToSort[i++];
+		while (j <= fin) temp[k++] = arrayOfValuesToSort[j++];
+
+		// Copy back to original array
+		System.arraycopy(temp, 0, arrayOfValuesToSort, ini, temp.length);
+			
+		// Update visualization showing transition from before to after
+		renderer.updateRenderArray(arrayOfValuesToSort);
+		Renderer.actionQueue.add(new Renderer.Action(Action.Operations.REFRESH_RANGE, ini, fin, arrayOfValuesToSort));
+	}
+
+	/**
+	 * Implements the Merge Sort algorithm recursively.
+	 * Divides the array into smaller subarrays, sorts them recursively,
+	 * and merges them back together in sorted order.
+	 * 
+	 * Time Complexity: O(n log n)
+	 * Space Complexity: O(n)
+	 * 
+	 * @param ini starting index of the subarray to sort
+	 * @param fin ending index of the subarray to sort
+	 */
+	private void mergeSort(int ini, int fin) {
+		if (ini >= fin)
+			return;
+
+		// Base case: if only 2 elements, sort them directly
+		if (fin - ini == 1) {
+			if (arrayOfValuesToSort[ini] > arrayOfValuesToSort[fin]) {
+				swap(ini, fin);
+			}
+			return;
+		}
+
+		int mid = ini + (fin - ini) / 2;
+		mergeSort(ini, mid);
+		mergeSort(mid + 1, fin);
+		merge(ini, mid, fin);
 	}
 
 	/**
