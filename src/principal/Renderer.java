@@ -677,48 +677,78 @@ class Renderer {
      * @param frequency the frequency of the tone in Hz
      * @param duration  the duration of the tone in milliseconds
      */
-    private void generateTone(int frequency, int duration) {
-        try {
-            // Audio format: 8kHz sample rate, 8-bit samples, mono, signed, little-endian
-            AudioFormat format = new AudioFormat(8000f, 8, 1, true, false);
-            int bufferSize = (int) (duration * 8);
-            byte[] buffer = new byte[bufferSize];
+     private void generateTone(int frequency, int duration) {
+        AudioFormat[] formats = new AudioFormat[] {
+                new AudioFormat(44100f, 16, 1, true, false),
+                new AudioFormat(22050f, 16, 1, true, false),
+                new AudioFormat(8000f, 8, 1, true, false)
+        };
 
-            // Generate sine wave samples with smooth start and end to avoid clicks
-            for (int i = 0; i < buffer.length; i++) {
-                double angle = i / (8000f / frequency) * 2.0 * Math.PI;
+        for (AudioFormat format : formats) {
+            try {
+                DataLine.Info info = new DataLine.Info(SourceDataLine.class, format);
+                if (!AudioSystem.isLineSupported(info)) {
+                    continue;
 
-                // Apply an envelope to reduce volume and avoid clicks at start/end
-                double envelope;
-                int fadeLength = Math.min(bufferSize / 7, 20); // 20 samples or 1/7th of buffer for fade
 
-                if (i < fadeLength) {
-                    // Fade in
-                    envelope = (double) i / fadeLength;
-                } else if (i > buffer.length - fadeLength) {
-                    // Fade out
-                    envelope = (double) (buffer.length - i) / fadeLength;
-                } else {
-                    // Full volume in the middle
-                    envelope = 1.0;
+
+
+
+
+
+
+
+
+
+
                 }
 
-                // Reduce overall volume to make it less loud
-                buffer[i] = (byte) (Math.sin(angle) * 60 * envelope); // Reduced from 127 to 60
-            }
+                int sampleCount = Math.max(1, (int) Math.ceil(duration * format.getSampleRate() / 1000.0));
+                int frameSize = format.getFrameSize();
+                byte[] buffer = new byte[sampleCount * frameSize];
 
-            // Play the sound
-            DataLine.Info info = new DataLine.Info(SourceDataLine.class, format);
-            SourceDataLine line = (SourceDataLine) AudioSystem.getLine(info);
-            line.open(format);
-            line.start();
-            line.write(buffer, 0, buffer.length);
-            line.drain();
-            line.close();
-        } catch (LineUnavailableException e) {
-            // If audio is not available, silently continue without sound
-            System.err.println("Audio not available: " + e.getMessage());
+                // Generate sine wave samples with smooth start and end to avoid clicks
+                int fadeLength = Math.min(sampleCount / 7, 20);
+                for (int i = 0; i < sampleCount; i++) {
+                    double angle = i / (format.getSampleRate() / frequency) * 2.0 * Math.PI;
+
+                    // Apply an envelope to reduce volume and avoid clicks at start/end
+                    double envelope;
+                    if (i < fadeLength) {
+                        // Fade in
+                        envelope = (double) i / fadeLength;
+                    } else if (i > sampleCount - fadeLength) {
+                        // Fade out
+                        envelope = (double) (sampleCount - i) / fadeLength;
+                    } else {
+                        // Full volume in the middle
+                        envelope = 1.0;
+                    }
+
+                    if (format.getSampleSizeInBits() == 8) {
+                        buffer[i] = (byte) (Math.sin(angle) * 60 * envelope);
+                    } else {
+                        short sample = (short) (Math.sin(angle) * 6000 * envelope);
+                        int index = i * 2;
+                        buffer[index] = (byte) (sample & 0xFF);
+                        buffer[index + 1] = (byte) ((sample >> 8) & 0xFF);
+                    }
+                }
+
+                // Play the sound
+                SourceDataLine line = (SourceDataLine) AudioSystem.getLine(info);
+                line.open(format);
+                line.start();
+                line.write(buffer, 0, buffer.length);
+                line.drain();
+                line.close();
+                return;
+            } catch (LineUnavailableException e) {
+                // Try the next format if the current one is unavailable
+            }
         }
+
+        System.err.println("Audio not available: no supported audio output format was found for this system.");
     }
 
 }
