@@ -2,607 +2,224 @@ package principal;
 
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
-import javafx.application.Platform;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.canvas.Canvas;
-import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.paint.Color;
 import javafx.stage.Stage;
-import principal.Renderer.Action;
+
+import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * QuickSort Visualization Application
+ * JavaFX entry point of the sorting visualizer.
  * <p>
- * A JavaFX application that visualizes the QuickSort algorithm in real-time.
- * Features:
- * - Interactive sorting visualization with graphical bars
- * - Step-by-step execution control (restart, iterate, stop, step)
- * - Configurable canvas size via command line arguments
- * - Real-time animation of sorting operations
- * - Audio feedback for swap operations
+ * Responsibilities are limited to the user interface: building the window and
+ * controls, parsing launch parameters, wiring the components together and
+ * driving the animation loop. Sorting logic lives in {@link SortAlgorithm}
+ * implementations; queue, playback modes and audio live in {@link Engine};
+ * drawing lives in {@link Renderer}.
  * </p>
  */
 public class QuickSort extends Application {
 
-	private enum SortAlgorithm {
-		QuickSort,
-		BubbleSort,
-		SelectionSort,
-		InsertionSort,
-		MergeSort
-	}
-
-	private SortAlgorithm actualSortAlgorithm = SortAlgorithm.QuickSort;
-	private ComboBox<SortAlgorithm> algorithmSelector;
-	private static final int DEFAULT_WIDTH = 800;
-	private static final int DEFAULT_HEIGHT = 600;
-	private static final int BUTTON_HEIGHT = 25;
-
-	private int canvasWidth;
-	private int canvasHeight;
-	private static final Color BACKGROUND_COLOR = Color.LIGHTGRAY;
-	private Canvas canvas;
-	private Renderer renderer;
-	private AnimationTimer animationTimer;
-	private boolean finished = false;
-
-	/**
-	 * Flag to control whether sound is enabled during sorting visualization.
-	 * When true, audio feedback is played during swap operations.
-	 * When false, all sound generation is skipped.
-	 */
-	private boolean soundEnabled = true;
-
-	private double frameCounter = 0;
-	private static final int FRAME_SKIP = 1; // Update every FRAME_SKIP frames for performance
-
-	/** Array containing the values to be sorted by the QuickSort algorithm */
-	private int[] arrayOfValuesToSort;
-
-	/**
-	 * Main method to launch the JavaFX application.
-	 * 
-	 * @param args command line arguments
-	 */
-	public static void main(String[] args) {
-		launch(args);
-	}
-
-	/**
-	 * Starts the JavaFX application and initializes the user interface.
-	 * Creates the main window with canvas for visualization and control buttons.
-	 * 
-	 * @param primaryStage the primary stage for this application
-	 */
-	@Override
-	public void start(Stage primaryStage) {
-		// Parse command line arguments for size
-		Parameters params = getParameters();
-		parseSize(params);
-		parseSoundOption(params); // Parse sound option
-
-		primaryStage.setTitle("QuickSort");
-
-		// Create and initialize
-		initialize();
-
-		restart(true);
-
-		// Setup mouse listeners
-		// setupMouseListeners();
-
-		// Create the restart button
-		Button restartButton = new Button("Restart");
-		restartButton.setOnAction(e -> restart(true));
-		restartButton.setPrefHeight(BUTTON_HEIGHT);
-
-		// Create the Iterate button for continuous animation
-		Button iterateButton = new Button("Iterate");
-		iterateButton.setOnAction(e -> iterate());
-		iterateButton.setPrefHeight(BUTTON_HEIGHT);
-
-		// Create the Stop button to pause animation
-		Button stopButton = new Button("Stop");
-		stopButton.setOnAction(e -> stopIteration());
-		stopButton.setPrefHeight(BUTTON_HEIGHT);
-
-		// Create the Step button for single-step execution
-		Button stepButton = new Button("Step");
-		stepButton.setOnAction(e -> step());
-		stepButton.setPrefHeight(BUTTON_HEIGHT);
-
-		// Create the algorithm selector dropdown
-		algorithmSelector = new ComboBox<>();
-		algorithmSelector.getItems().addAll(SortAlgorithm.values());
-		algorithmSelector.setValue(actualSortAlgorithm);
-		algorithmSelector.setPrefHeight(BUTTON_HEIGHT);
-		// Add a listener to update the actualSortAlgorithm field when selection changes
-		algorithmSelector.setOnAction(e -> {
-			actualSortAlgorithm = algorithmSelector.getValue();
-			restart(false);
-		});
-
-		// Layout
-		BorderPane root = new BorderPane();
-		root.setCenter(canvas);
-
-		HBox buttons = new HBox();
-		root.setBottom(buttons);
-		buttons.setPadding(new Insets(0, 10, 0, 0));
-		buttons.setSpacing(10);
-		buttons.getChildren().addAll(restartButton, iterateButton, stopButton, stepButton, algorithmSelector);
-
-		// Create scene and show
-		Scene scene = new Scene(root, canvasWidth, canvasHeight + BUTTON_HEIGHT);
-		primaryStage.setScene(scene);
-		primaryStage.setResizable(false);
-		primaryStage.show();
-	}
-
-	/**
-	 * Generates a random array of integers for sorting visualization.
-	 * 
-	 * @param numberOfElements the size of the array to generate
-	 * @param maxValue         the maximum value for array elements (exclusive)
-	 */
-	private void generateRandomArray(int numberOfElements, int maxValue) {
-		arrayOfValuesToSort = new int[numberOfElements];
-		renderer.renderArrayOfValues = new int[numberOfElements];
-		for (int i = 0; i < numberOfElements; i++) {
-			arrayOfValuesToSort[i] = (int) (Math.random() * maxValue);
-			renderer.renderArrayOfValues[i] = arrayOfValuesToSort[i];
-		}
-	}
-
-	/**
-	 * Parses command line arguments for canvas size.
-	 * 
-	 * @param params the parameters to parse
-	 */
-	private void parseSize(Parameters params) {
-		try {
-			if (params.getNamed().containsKey("width")) {
-				canvasWidth = Integer.parseInt(params.getNamed().get("width"));
-			} else {
-				canvasWidth = DEFAULT_WIDTH;
-			}
-
-			if (params.getNamed().containsKey("height")) {
-				canvasHeight = Integer.parseInt(params.getNamed().get("height"));
-			} else {
-				canvasHeight = DEFAULT_HEIGHT;
-			}
-		} catch (NumberFormatException e) {
-			System.err.println("Invalid size parameters, using defaults");
-			canvasWidth = DEFAULT_WIDTH;
-			canvasHeight = DEFAULT_HEIGHT;
-		}
-	}
-
-	/**
-	 * Parses command line argument for sound option.
-	 * 
-	 * @param params the parameters to parse
-	 */
-	private void parseSoundOption(Parameters params) {
-		if (params.getNamed().containsKey("sound")) {
-			soundEnabled = Boolean.parseBoolean(params.getNamed().get("sound"));
-		}
-	}
-
-	/**
-	 * Initializes the canvas and starts the animation loop.
-	 * Sets up the graphics context, creates the renderer, and begins the animation
-	 * timer
-	 * for real-time visualization updates.
-	 */
-	private void initialize() {
-		canvas = new Canvas(canvasWidth, canvasHeight);
-
-		GraphicsContext gc = canvas.getGraphicsContext2D();
-
-		gc.clearRect(0, 0, canvasWidth, canvasHeight);
-		gc.setFill(BACKGROUND_COLOR);
-		gc.fillRect(0, 0, canvasWidth, canvasHeight);
-
-		finished = false;
-
-		renderer = new Renderer(gc, canvasWidth, canvasHeight, new Color(.3, .6, .9, 1), BACKGROUND_COLOR,
-				soundEnabled);
-		animationTimer = new AnimationTimer() {
-			@Override
-			public void handle(long now) {
-				if (!finished && renderer != null) {
-					frameCounter++;
-					if (frameCounter >= Double.MAX_VALUE)
-						frameCounter = 0;
-					if (frameCounter % FRAME_SKIP == 0) {
-						try {
-							renderer.updateRegion();
-						} catch (Exception e) {
-							System.err.println("Error updating : " + e.getMessage());
-							stopAnimation();
-						}
-					}
-				}
-			}
-		};
-
-		animationTimer.start();
-	}
-
-	/**
-	 * Restarts the sorting simulation with a new randomly generated array.
-	 * Clears the current visualization, generates new data, and starts the selected
-	 * sorting algorithm.
-	 */
-	private void restart(boolean generateNewArray) {
-
-		if (renderer == null)
-			return;
-		System.out.println("Restarting with " + actualSortAlgorithm + "...");
-		renderer.clearImage();
-		// Generate new array if requested, else get the array of the rendered
-		if (generateNewArray)
-			generateRandomArray(canvasWidth / Renderer.PIXEL_SIZE - 2,
-					canvasHeight / Renderer.PIXEL_SIZE - 10);
-		else
-			renderer.copyRenderArrayOfValues(arrayOfValuesToSort);
-
-		for (int a = 0; a < arrayOfValuesToSort.length; a++) {
-			renderer.rectangleToScreen(a, (canvasHeight / Renderer.PIXEL_SIZE) - arrayOfValuesToSort[a] - 1, 1,
-					arrayOfValuesToSort[a], true, true);
-		}
-
-		renderer.rectangleToScreen(0, (canvasHeight / Renderer.PIXEL_SIZE) - 1, (canvasWidth / Renderer.PIXEL_SIZE), 1,
-				true, true, Color.LIGHTBLUE);
-
-		if (renderer != null) {
-			renderer.restart();
-		}
-
-		// Use the selected algorithm
-		switch (actualSortAlgorithm) {
-			case BubbleSort:
-				bubbleSort(0, arrayOfValuesToSort.length - 1);
-				break;
-			case SelectionSort:
-				selectionSort(0, arrayOfValuesToSort.length - 1);
-				break;
-			case InsertionSort:
-				insertionSort(0, arrayOfValuesToSort.length - 1);
-				break;
-			case MergeSort:
-				mergeSort(0, arrayOfValuesToSort.length - 1);
-				break;
-			default:
-				quickSort(0, arrayOfValuesToSort.length - 1);
-				break;
-		}
-	}
-
-	/**
-	 * Swaps two elements in the array and adds the swap action to the renderer
-	 * queue.
-	 * Also plays a sound based on the distance between the swapped elements.
-	 * Low frequency (bass) for nearby elements, high frequency for distant
-	 * elements.
-	 * 
-	 * @param ini index of the first element to swap
-	 * @param fin index of the second element to swap
-	 */
-	private void swap(int i, int j) {
-		// Add the swap action to the renderer queue
-		Renderer.actionQueue.add(new Renderer.Action(Action.Operations.SWAP, i, j));
-
-		// Perform the actual array swap
-		int temp = arrayOfValuesToSort[i];
-		arrayOfValuesToSort[i] = arrayOfValuesToSort[j];
-		arrayOfValuesToSort[j] = temp;
-	}
-
-	/**
-	 * Implements the Selection Sort algorithm.
-	 * 
-	 * Selection sort works by repeatedly finding the minimum element from the
-	 * unsorted part
-	 * and putting it at the beginning. The algorithm maintains two subarrays in a
-	 * given array:
-	 * 1) The subarray which is already sorted.
-	 * 2) Remaining subarray which is unsorted.
-	 * 
-	 * In every iteration of selection sort, the minimum element from the unsorted
-	 * subarray
-	 * is picked and moved to the sorted subarray.
-	 * 
-	 * Time Complexity: O(n²)
-	 * Space Complexity: O(1)
-	 * 
-	 * @param ini starting index of the subarray to sort
-	 * @param fin ending index of the subarray to sort
-	 */
-	private void selectionSort(int ini, int fin) {
-		// One by one move boundary of unsorted subarray
-		for (int i = ini; i < fin; i++) {
-			// Find the minimum element in unsorted array
-			int minIndex = i;
-			Renderer.actionQueue.add(new Renderer.Action(Action.Operations.PIVOT, i, 0));
-			for (int j = i + 1; j <= fin; j++) {
-				Renderer.actionQueue.add(new Renderer.Action(Action.Operations.COMPARE, j, minIndex));
-				if (arrayOfValuesToSort[j] < arrayOfValuesToSort[minIndex]) {
-					minIndex = j;
-				}
-			}
-
-			// Swap the found minimum element with the first element
-			if (minIndex != i) {
-				swap(i, minIndex);
-			}
-		}
-	}
-
-	/**
-	 * Implements the Insertion Sort algorithm.
-	 * 
-	 * Insertion sort builds the final sorted array one item at a time. It is much
-	 * less efficient
-	 * on large lists than more advanced algorithms such as quicksort, heapsort, or
-	 * merge sort.
-	 * 
-	 * Insertion sort iterates, consuming one input element each repetition, and
-	 * growing a sorted
-	 * output list. At each iteration, insertion sort removes one element from the
-	 * input data,
-	 * finds the location it belongs within the sorted list, and inserts it there.
-	 * It repeats until no input elements remain.
-	 * 
-	 * Time Complexity: O(n²)
-	 * Space Complexity: O(1)
-	 * 
-	 * @param ini starting index of the subarray to sort
-	 * @param fin ending index of the subarray to sort
-	 */
-	private void insertionSort(int ini, int fin) {
-		// Start from the second element (index ini+1) as the first element is
-		// considered sorted
-		for (int i = ini + 1; i <= fin; i++) {
-			int j = i;
-
-			// Mark the current element being processed
-			Renderer.actionQueue.add(new Renderer.Action(Action.Operations.PIVOT, i, 0));
-
-			// Move elements of arrayOfValuesToSort[ini..i-1], that are greater than key,
-			// to one position ahead of their current position using swaps
-			while (j > ini && arrayOfValuesToSort[j] < arrayOfValuesToSort[j - 1]) {
-				Renderer.actionQueue.add(new Renderer.Action(Action.Operations.COMPARE, j, j - 1));
-				// Swap adjacent elements
-				swap(j, j - 1);
-				j--;
-			}
-		}
-	}
-
-	/**
-	 * Implements the Bubble Sort algorithm.
-	 * 
-	 * Bubble sort is a simple sorting algorithm that repeatedly steps through the
-	 * list,
-	 * compares adjacent elements and swaps them if they are in the wrong order.
-	 * The pass through the list is repeated until the list is sorted.
-	 * 
-	 * The algorithm, which is a comparison sort, is named for the way smaller or
-	 * larger elements
-	 * "bubble" to the top of the list.
-	 * 
-	 * An optimized version is implemented that stops early if no swaps are made in
-	 * a pass,
-	 * indicating the list is already sorted.
-	 * 
-	 * Time Complexity: O(n²)
-	 * Space Complexity: O(1)
-	 * 
-	 * @param ini starting index of the subarray to sort
-	 * @param fin ending index of the subarray to sort
-	 */
-
-	private void bubbleSort(int ini, int fin) {
-		boolean swapped;
-		// Outer loop
-		// for each loop element at i position becames ordered
-		for (int i = fin; i > ini; i--) {
-			swapped = false;
-			// Compare adjacent elements
-			Renderer.actionQueue.add(new Renderer.Action(Action.Operations.PIVOT, i - 1, 0));
-			for (int j = ini; j < i; j++) {
-				Renderer.actionQueue.add(new Renderer.Action(Action.Operations.COMPARE, j, j + 1));
-				if (arrayOfValuesToSort[j] > arrayOfValuesToSort[j + 1]) {
-					swap(j, j + 1);
-					swapped = true;
-				}
-			}
-			// If no swapping occurred, array is sorted
-			if (!swapped)
-				break;
-		}
-	}
-
-	/**
-	 * Merges two sorted subarrays into a single sorted array.
-	 * Compares elements from both subarrays and arranges them in order,
-	 * using swaps to make the merge process visible in the animation.
-	 * 
-	 * @param ini starting index of the first subarray
-	 * @param mid ending index of the first subarray (mid+1 starts second subarray)
-	 * @param fin ending index of the second subarray
-	 */
-	private void merge(int ini, int mid, int fin) {
-		// Highlight the two subarrays being merged
-		Renderer.actionQueue.add(new Renderer.Action(Action.Operations.PIVOT, ini, 0));
-		Renderer.actionQueue.add(new Renderer.Action(Action.Operations.PIVOT, mid + 1, 0));
-		
-		int[] temp = new int[fin - ini + 1];
-		int i = ini, j = mid + 1, k = 0;
-
-		// Merge process with comparisons
-		while (i <= mid && j <= fin) {
-			Renderer.actionQueue.add(new Renderer.Action(Action.Operations.COMPARE, i, j));
-			if (arrayOfValuesToSort[i] <= arrayOfValuesToSort[j]) {
-				temp[k++] = arrayOfValuesToSort[i++];
-			} else {
-				temp[k++] = arrayOfValuesToSort[j++];
-			}
-		}
-
-		// Copy remaining elements
-		while (i <= mid) temp[k++] = arrayOfValuesToSort[i++];
-		while (j <= fin) temp[k++] = arrayOfValuesToSort[j++];
-
-		// Copy back to original array
-		System.arraycopy(temp, 0, arrayOfValuesToSort, ini, temp.length);
-			
-		// Update visualization showing transition from before to after
-		renderer.updateRenderArray(arrayOfValuesToSort);
-		Renderer.actionQueue.add(new Renderer.Action(Action.Operations.REFRESH_RANGE, ini, fin, arrayOfValuesToSort));
-	}
-
-	/**
-	 * Implements the Merge Sort algorithm recursively.
-	 * Divides the array into smaller subarrays, sorts them recursively,
-	 * and merges them back together in sorted order.
-	 * 
-	 * Time Complexity: O(n log n)
-	 * Space Complexity: O(n)
-	 * 
-	 * @param ini starting index of the subarray to sort
-	 * @param fin ending index of the subarray to sort
-	 */
-	private void mergeSort(int ini, int fin) {
-		if (ini >= fin)
-			return;
-
-		// Base case: if only 2 elements, sort them directly
-		if (fin - ini == 1) {
-			if (arrayOfValuesToSort[ini] > arrayOfValuesToSort[fin]) {
-				swap(ini, fin);
-			}
-			return;
-		}
-
-		int mid = ini + (fin - ini) / 2;
-		mergeSort(ini, mid);
-		mergeSort(mid + 1, fin);
-		merge(ini, mid, fin);
-	}
-
-	/**
-	 * Implements the QuickSort algorithm recursively.
-	 * Uses the last element as pivot and partitions the array around it.
-	 * 
-	 * @param ini starting index of the subarray to sort
-	 * @param fin ending index of the subarray to sort
-	 */
-	private void quickSort(int ini, int fin) {
-		// Base case: if subarray has 1 or 0 elements, it's already sorted
-		if (fin <= ini)
-			return;
-
-		// Choose the last element as pivot
-		int pivotValue = arrayOfValuesToSort[fin];
-		Renderer.actionQueue.add(new Renderer.Action(Action.Operations.PIVOT, fin, 0));
-
-		// Initialize pointers for partitioning
-		int i = ini; // Left pointer
-		int j = fin - 1; // Right pointer (excluding pivot)
-
-		// Partition: move elements smaller than pivot to left, larger to right
-		while (i <= j) {
-			// Find element from left that should be on right side
-
-			while (i <= j && arrayOfValuesToSort[i] <= pivotValue) {
-				Renderer.actionQueue.add(new Renderer.Action(Action.Operations.COMPARE, i, fin));
-				i++;
-			}
-			// Find element from right that should be on left side
-			Renderer.actionQueue.add(new Renderer.Action(Action.Operations.COMPARE, i, fin));
-			while (i <= j && arrayOfValuesToSort[j] > pivotValue) {
-				Renderer.actionQueue.add(new Renderer.Action(Action.Operations.COMPARE, j, fin));
-				j--;
-			}
-
-			// Swap elements if both pointers found misplaced elements
-			if (i < j) {
-				swap(i, j);
-				i++;
-				j--;
-			}
-		}
-
-		// Place pivot in its correct position (only if necessary)
-		if (arrayOfValuesToSort[i] > pivotValue && i != fin) {
-			swap(i, fin);
-		}
-
-		// Recursively sort the two partitions
-		quickSort(ini, i - 1); // Sort left partition
-		quickSort(i + 1, fin); // Sort right partition
-	}
-
-	/**
-	 * Starts continuous iteration mode for the sorting visualization.
-	 * The animation will run automatically until stopped.
-	 */
-	private void iterate() {
-		System.out.println("Iterating ...");
-		if (renderer != null) {
-			renderer.iterate();
-		}
-	}
-
-	/**
-	 * Stops the continuous iteration mode of the sorting visualization.
-	 */
-	private void stopIteration() {
-		System.out.println("stop ...");
-		if (renderer != null) {
-			renderer.stopIteration();
-		}
-	}
-
-	/**
-	 * Performs a single step in the sorting visualization.
-	 * Useful for debugging or educational purposes to see each operation.
-	 */
-	private void step() {
-		System.out.println("step ...");
-		if (renderer != null) {
-			renderer.step();
-		}
-	}
-
-	/**
-	 * Stops the animation timer and cleans up resources.
-	 */
-	private void stopAnimation() {
-		finished = true;
-		if (animationTimer != null) {
-			animationTimer.stop();
-		}
-	}
-
-	/**
-	 * Cleanup method called when the application is closing.
-	 * Stops the animation timer and releases resources.
-	 */
-	@Override
-	public void stop() {
-		stopAnimation();
-		renderer = null;
-		System.out.println(" destroyed");
-		Platform.exit();
-	}
+    /** Available bar sizes: smaller bars mean more elements and longer, calmer runs. */
+    private enum BarSize {
+        LARGE(16), MEDIUM(10), SMALL(6), TINY(4), MICRO(3);
+
+        final int pixels;
+
+        BarSize(int pixels) {
+            this.pixels = pixels;
+        }
+
+        @Override
+        public String toString() {
+            String name = name();
+            return name.charAt(0) + name.substring(1).toLowerCase() + " (" + pixels + " px)";
+        }
+    }
+
+    private static final int DEFAULT_WIDTH = 800;
+    private static final int DEFAULT_HEIGHT = 600;
+    private static final int BUTTON_HEIGHT = 25;
+    private static final Color BACKGROUND_COLOR = Color.LIGHTGRAY;
+    private static final Color BAR_COLOR = new Color(0.3, 0.6, 0.9, 1);
+
+    private int canvasWidth = DEFAULT_WIDTH;
+    private int canvasHeight = DEFAULT_HEIGHT;
+    private boolean soundEnabled = true;
+    private BarSize barSize = BarSize.LARGE;
+
+    private Canvas canvas;
+    private Renderer renderer;
+    private Engine engine;
+    private Sound sound;
+    private AnimationTimer animationTimer;
+    private SortAlgorithm currentAlgorithm;
+    /** The unsorted array of the current run, kept to replay it with another algorithm. */
+    private int[] initialValues;
+
+    public static void main(String[] args) {
+        launch(args);
+    }
+
+    @Override
+    public void start(Stage primaryStage) {
+        Parameters params = getParameters();
+        parseSize(params);
+        parseSoundOption(params);
+
+        canvas = new Canvas(canvasWidth, canvasHeight);
+        sound = soundEnabled ? new SoundPlayer() : Sound.silent();
+        rebuildRenderer();
+
+        BorderPane root = new BorderPane();
+        root.setCenter(canvas);
+        root.setBottom(buildControls());
+
+        restart(true);
+        startAnimationLoop();
+
+        primaryStage.setTitle("QuickSort");
+        primaryStage.setScene(new Scene(root, canvasWidth, canvasHeight + BUTTON_HEIGHT));
+        primaryStage.setResizable(false);
+        primaryStage.show();
+    }
+
+    /** Builds the bottom control bar: action buttons and algorithm selector. */
+    private HBox buildControls() {
+        Button restartButton = createButton("Restart", () -> restart(true));
+        // Lambdas, not bound method references: the engine is recreated on bar
+        // size changes, so the buttons must read the current field each click
+        Button iterateButton = createButton("Iterate", () -> engine.iterate());
+        Button stopButton = createButton("Stop", () -> engine.stopIteration());
+        Button stepButton = createButton("Step", () -> engine.step());
+
+        List<SortAlgorithm> algorithms = SortAlgorithm.all();
+        currentAlgorithm = algorithms.get(0);
+        ComboBox<SortAlgorithm> algorithmSelector = new ComboBox<>();
+        algorithmSelector.getItems().addAll(algorithms);
+        algorithmSelector.setValue(currentAlgorithm);
+        algorithmSelector.setPrefHeight(BUTTON_HEIGHT);
+        algorithmSelector.setOnAction(e -> {
+            currentAlgorithm = algorithmSelector.getValue();
+            restart(false);
+        });
+
+        ComboBox<BarSize> sizeSelector = new ComboBox<>();
+        sizeSelector.getItems().addAll(BarSize.values());
+        sizeSelector.setValue(barSize);
+        sizeSelector.setPrefHeight(BUTTON_HEIGHT);
+        sizeSelector.setOnAction(e -> {
+            barSize = sizeSelector.getValue();
+            rebuildRenderer();
+            restart(true);
+        });
+
+        HBox controls = new HBox(10, restartButton, iterateButton, stopButton, stepButton,
+                algorithmSelector, sizeSelector);
+        controls.setPadding(new Insets(0, 10, 0, 0));
+        controls.setAlignment(Pos.CENTER_LEFT);
+        return controls;
+    }
+
+    /** Recreates the drawing surface and the engine for the current bar size. */
+    private void rebuildRenderer() {
+        renderer = new Renderer(canvas.getGraphicsContext2D(), canvasWidth, canvasHeight,
+                barSize.pixels, BAR_COLOR, BACKGROUND_COLOR);
+        engine = new Engine(renderer, sound);
+    }
+
+    private Button createButton(String text, Runnable action) {
+        Button button = new Button(text);
+        button.setOnAction(e -> action.run());
+        button.setPrefHeight(BUTTON_HEIGHT);
+        return button;
+    }
+
+    /**
+     * Prepares a new run: with a fresh random array, or replaying the same
+     * initial array with the currently selected algorithm.
+     * <p>
+     * The algorithm runs to completion synchronously on its own copy of the
+     * array, reporting operations to the engine, which queues them for
+     * playback. {@code initialValues} stays unsorted for future replays.
+     * </p>
+     */
+    private void restart(boolean generateNewArray) {
+        if (generateNewArray || initialValues == null) {
+            initialValues = generateRandomArray(renderer.barCount(), renderer.maxBarValue());
+        }
+        engine.prepare(initialValues, currentAlgorithm.tintsComparisons());
+        currentAlgorithm.sort(initialValues.clone(), engine);
+    }
+
+    private static int[] generateRandomArray(int size, int maxValue) {
+        int[] values = new int[size];
+        for (int i = 0; i < size; i++) {
+            values[i] = ThreadLocalRandom.current().nextInt(maxValue);
+        }
+        return values;
+    }
+
+    /** Drives the engine with one tick per frame. */
+    private void startAnimationLoop() {
+        animationTimer = new AnimationTimer() {
+            @Override
+            public void handle(long now) {
+                try {
+                    engine.tick();
+                } catch (RuntimeException e) {
+                    System.err.println("Animation error: " + e.getMessage());
+                    stop();
+                }
+            }
+        };
+        animationTimer.start();
+    }
+
+    /** Parses the named arguments {@code --width} and {@code --height}. */
+    private void parseSize(Parameters params) {
+        try {
+            canvasWidth = parsePositive(params, "width", DEFAULT_WIDTH);
+            canvasHeight = parsePositive(params, "height", DEFAULT_HEIGHT);
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid size parameters, using defaults");
+            canvasWidth = DEFAULT_WIDTH;
+            canvasHeight = DEFAULT_HEIGHT;
+        }
+    }
+
+    private static int parsePositive(Parameters params, String name, int defaultValue) {
+        String raw = params.getNamed().get(name);
+        if (raw == null) {
+            return defaultValue;
+        }
+        int value = Integer.parseInt(raw);
+        if (value <= 0) {
+            throw new NumberFormatException(name + " must be positive");
+        }
+        return value;
+    }
+
+    /** Parses the named argument {@code --sound=true|false}. */
+    private void parseSoundOption(Parameters params) {
+        soundEnabled = Boolean.parseBoolean(params.getNamed().getOrDefault("sound", "true"));
+    }
+
+    @Override
+    public void stop() {
+        if (animationTimer != null) {
+            animationTimer.stop();
+        }
+        if (sound != null) {
+            sound.shutdown();
+        }
+    }
 }

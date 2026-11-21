@@ -1,724 +1,274 @@
 package principal;
 
 import javafx.scene.canvas.GraphicsContext;
-import javafx.scene.image.*;
+import javafx.scene.image.PixelFormat;
+import javafx.scene.image.PixelWriter;
+import javafx.scene.image.WritableImage;
+import javafx.scene.image.WritablePixelFormat;
 import javafx.scene.paint.Color;
 
-import javax.sound.sampled.*;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import java.util.LinkedList;
-import java.util.Queue;
 
 /**
- * Renderer class for visualizing QuickSort algorithm operations.
+ * JavaFX drawing surface for the sorting visualization.
  * <p>
- * This class handles the graphical representation of sorting operations
- * including:
- * - Drawing array elements as colored bars
- * - Animating swap operations with blinking effects
- * - Highlighting pivot elements during partitioning
- * - Managing animation queues and timing
- * - Providing step-by-step and continuous visualization modes
+ * Drawing only: no action queue, no playback state and no audio (those belong
+ * to the {@link Engine}). Bars are composed into an off-screen image through
+ * direct pixel writes for efficiency, and {@link #present()} blits that image
+ * onto the canvas. All geometry (cell size, margins, baseline) is encapsulated
+ * here; callers only deal with bar indices and values.
  * </p>
  */
-class Renderer {
-    /**
-     * Action class represents a single animation operation in the QuickSort
-     * visualization.
-     * Each action has an instruction type, parameters, and manages its own
-     * animation stages.
-     */
-    protected static class Action {
+class Renderer implements SortView {
 
-        /** First parameter (typically an array index) */
-        private final int param1;
-        /** Second parameter (typically another array index for swaps) */
-        private final int param2;
-        /** Current animation stage counter */
-        private int stage;
-        private int totalStages;
+    /** Minimum allowed cell size in pixels. */
+    public static final int MIN_PIXEL_SIZE = 3;
+    /** Horizontal margin, in cells, left empty on each side of the array. */
+    private static final int SIDE_MARGIN = 2;
+    /** Vertical margin, in cells, kept above the tallest bar. */
+    private static final int TOP_MARGIN = 10;
 
-        /** Constant for swap operation */
-        public static enum Operations {
-            SWAP,
-            PIVOT,
-            COMPARE,
-            REFRESH_RANGE
-        }
+    private static final Color BASELINE_COLOR = Color.LIGHTBLUE;
+    /** Persistent highlight color of the pivot bar. */
+    private static final Color PIVOT_COLOR = Color.ORANGE;
+    /** Marker color of the first compared element. */
+    private static final Color FIRST_COMPARED_COLOR = Color.DARKGREEN;
+    private static final Color SECOND_COMPARED_COLOR = Color.BLUE;
 
-        /** The type of operation */
-        private final Operations instruction;
-
-        /**
-         * Creates a new action for the animation queue.
-         * 
-         * @param instruction the type of operation (SWAP or PIVOT)
-         * @param param1      first parameter (array index)
-         * @param param2      second parameter (array index for swaps, unused for
-         *                    pivots)
-         */
-        private int[] snapshotArray; // For REFRESH_RANGE to store array state
-        
-        public Action(Operations instruction, int param1, int param2) {
-            this.instruction = instruction;
-            this.param1 = param1;
-            this.param2 = param2;
-            this.totalStages=getInstructionStageNumber();
-            this.stage = totalStages;
-        }
-        
-        public Action(Operations instruction, int param1, int param2, int[] arraySnapshot) {
-            this(instruction, param1, param2);
-            if (arraySnapshot != null) {
-                this.snapshotArray = arraySnapshot.clone();
-            }
-        }
-        
-        public int[] getSnapshotArray() {
-            return snapshotArray;
-        }
-
-        /**
-         * Gets the number of animation stages for this instruction type.
-         * 
-         * @return number of stages (8 for SWAP, 9 for PIVOT)
-         */
-        private int getInstructionStageNumber() {
-            return switch (instruction) {
-                case SWAP ->10;
-                case PIVOT -> 2;
-                case COMPARE -> 2;
-                case REFRESH_RANGE -> Math.max(1, param2 - param1 + 1); // One stage per bar
-                default -> 0;
-            };
-        }
-
-        /** @return the instruction type */
-        public Operations getInstruction() {
-            return instruction;
-        }
-
-        /** @return the first parameter */
-        public int getParam1() {
-            return param1;
-        }
-
-        /** @return the second parameter */
-        public int getParam2() {
-            return param2;
-        }
-
-        /**
-         * Advances the animation by one stage.
-         * 
-         * @return true if the animation is complete, false if more stages remain
-         */
-        public boolean endStage() {
-            stage--;
-            return stage <= 0;
-        }
-
-        /** @return the current stage number */
-        public int getStage() {
-            return stage;
-        }
-
-    /** @return totalStages number */
-        public int getTotalStages(){
-            return totalStages;
-        }
-
-    }
-
-    /** Array of values to be rendered as bars */
-    protected int[] renderArrayOfValues;
-    /** Queue of animation actions to be processed */
-    protected static final Queue<Action> actionQueue = new LinkedList<>();
-    /** Size of each cell in pixels */
-    protected static final int PIXEL_SIZE = 16;
-
-    /** Default color for drawing bars */
-    private final Color defaultColor;
-    /** Inverted color for highlighting pivots */
-    private final Color invertedDefaultColor;
-    /** Background color for clearing areas */
-    private final Color backGroundColor;
-    /** JavaFX graphics context for drawing */
     private final GraphicsContext gc;
-    /** Canvas width in pixels */
     private final int width;
-    /** Canvas height in pixels */
     private final int height;
-    /** Number of cells horizontally */
+    /** Size of each cell in pixels. */
+    private final int pixelSize;
     private final int cellWidth;
-    /** Number of cells vertically */
     private final int cellHeight;
-    /** Writable image for efficient pixel manipulation */
-    private final WritableImage estadosImage;
-    /** Pixel writer for direct pixel access */
+    private final Color barColor;
+    private final Color backgroundColor;
+    /** Off-screen image where bars are composed before being presented. */
+    private final WritableImage backBuffer;
     private final PixelWriter pixelWriter;
-
-    /** Flag to control whether sound is enabled during visualization */
-    private final boolean soundEnabled;
-
-    /** Flag indicating if continuous iteration is active */
-    private boolean runningIteration = false;
-    /** Flag indicating if single step mode is active */
-    private boolean runningStep = false;
-    /** Reusable buffer for pixel data to avoid allocations */
-    private final byte[] blockBuffer = new byte[PIXEL_SIZE * PIXEL_SIZE * 4];
+    /** Reusable buffer for one cell of pixel data, to avoid allocations. */
+    private final byte[] blockBuffer;
 
     /**
-     * Creates a new Renderer for QuickSort visualization.
-     * 
+     * Creates a new drawing surface.
+     *
      * @param gc              the graphics context to draw on (must not be null)
-     * @param w               canvas width in pixels (must be positive)
-     * @param h               canvas height in pixels (must be positive)
-     * @param barsColor       color for drawing the array bars
-     * @param backGroundColor color for the background
-     * @param soundEnabled    whether sound is enabled for audio feedback
+     * @param width           canvas width in pixels (must be positive)
+     * @param height          canvas height in pixels (must be positive)
+     * @param pixelSize       size of each cell in pixels (at least {@link #MIN_PIXEL_SIZE})
+     * @param barColor        color for drawing the array bars
+     * @param backgroundColor color for the background
      * @throws IllegalArgumentException if gc is null or dimensions are invalid
      */
-    public Renderer(GraphicsContext gc, int w, int h, Color barsColor, Color backGroundColor, boolean soundEnabled) {
+    public Renderer(GraphicsContext gc, int width, int height, int pixelSize, Color barColor, Color backgroundColor) {
         if (gc == null) {
             throw new IllegalArgumentException("GraphicsContext cannot be null");
         }
-        if (w <= 0 || h <= 0) {
+        if (width <= 0 || height <= 0) {
             throw new IllegalArgumentException("Width and height must be positive");
         }
+        if (pixelSize < MIN_PIXEL_SIZE) {
+            throw new IllegalArgumentException("Cell size must be at least " + MIN_PIXEL_SIZE + " pixels");
+        }
 
-        this.defaultColor = barsColor;
-        this.invertedDefaultColor = invertColor(barsColor);
-        this.backGroundColor = backGroundColor;
         this.gc = gc;
-        this.width = w;
-        this.height = h;
-        this.cellWidth = width / PIXEL_SIZE;
-        this.cellHeight = height / PIXEL_SIZE;
-        this.soundEnabled = soundEnabled;
+        this.width = width;
+        this.height = height;
+        this.pixelSize = pixelSize;
+        this.cellWidth = width / pixelSize;
+        this.cellHeight = height / pixelSize;
+        this.barColor = barColor;
+        this.backgroundColor = backgroundColor;
 
-        // Create writable image and pixel writer for efficient drawing
-        estadosImage = new WritableImage(width, height);
-        pixelWriter = estadosImage.getPixelWriter();
-
+        this.backBuffer = new WritableImage(width, height);
+        this.pixelWriter = backBuffer.getPixelWriter();
+        this.blockBuffer = new byte[pixelSize * pixelSize * 4];
     }
 
-    protected void copyRenderArrayOfValues(int[] ArrayOfValues) {
-        for (int i = 0; i < ArrayOfValues.length; i++) {
-            ArrayOfValues[i] = renderArrayOfValues[i];
-        }
+    /** @return how many bars fit on screen, excluding the side margins */
+    public int barCount() {
+        return cellWidth - SIDE_MARGIN;
     }
 
-    /**
-     * Updates the render array with values from the main sorting array.
-     * Used by refresh action to sync visualization with actual array state.
-     * 
-     * @param sourceArray the main array being sorted
-     */
-    protected void updateRenderArray(int[] sourceArray) {
-        System.arraycopy(sourceArray, 0, renderArrayOfValues, 0, renderArrayOfValues.length);
+    /** @return the maximum bar value that fits below the top margin */
+    public int maxBarValue() {
+        return cellHeight - TOP_MARGIN;
     }
 
-    
-
-    /**
-     * Refreshes a specific range of the visualization one bar at a time.
-     * Updates and redraws bars from param1 to param2 indices progressively.
-     * 
-     * @param action the refresh range action with start and end indices
-     * @return true when refresh is complete
-     */
-    private boolean refreshRange(Action action) {
-        int start = action.getParam1();
-        int end = action.getParam2();
-        int currentIndex = start + (action.getTotalStages() - action.getStage());
-        
-        if (currentIndex <= end) {
-            // Update render array with new value first
-            renderArrayOfValues[currentIndex] = action.getSnapshotArray() != null ? 
-                action.getSnapshotArray()[currentIndex] : renderArrayOfValues[currentIndex];
-            
-            
-            // Clear and redraw the bar
-            clearRectangle(currentIndex, 0, 1, cellHeight - 1);
-            rectangleToScreen(currentIndex, (height / PIXEL_SIZE) - renderArrayOfValues[currentIndex] - 1, 1,
-                    renderArrayOfValues[currentIndex], true, true, defaultColor);
-            
-            // Play short high-pitched sound
-            if (soundEnabled && (end-start>2)) {                
-                  playSwapSound( (action.getTotalStages() - action.getStage()));
-            }
-        }
-        
-        return action.endStage();
-    }
-
-    /**
-     * Clears the entire canvas and resets the image.
-     * Sets all pixels to transparent and fills the background.
-     */
-    public void clearImage() {
-        pixelWriter.setPixels(0, 0, width, height, PixelFormat.getByteBgraInstance(), new byte[width * height * 4], 0,
-                width * 4);
+    @Override
+    public void clear() {
+        pixelWriter.setPixels(0, 0, width, height, PixelFormat.getByteBgraInstance(),
+                new byte[width * height * 4], 0, width * 4);
+        gc.setFill(backgroundColor);
         gc.fillRect(0, 0, width, height);
-        gc.drawImage(estadosImage, 0, 0);
-        System.out.println("Image Drawn");
+        present();
+    }
+
+    @Override
+    public void drawBars(int[] values) {
+        for (int i = 0; i < values.length; i++) {
+            drawBar(i, values[i], 0);
+        }
+        drawBaseline();
+    }
+
+    @Override
+    public void drawBar(int index, int value, double darkness) {
+        clearColumn(index);
+        drawBarShape(index, value, darken(barColor, darkness));
+    }
+
+    @Override
+    public void drawPivotBar(int index, int value, boolean inverted) {
+        clearColumn(index);
+        drawBarShape(index, value, inverted ? PIVOT_COLOR.darker() : PIVOT_COLOR);
+    }
+
+    @Override
+    public void drawComparedBar(int index, int value, boolean first) {
+        clearColumn(index);
+        drawBarShape(index, value, first ? FIRST_COMPARED_COLOR : SECOND_COMPARED_COLOR);
+    }
+
+    @Override
+    public void showComparison(int i, int j) {
+        // Redrawing the baseline erases any previous markers
+        drawBaseline();
+        drawTriangleMarker(i, cellHeight - 1, FIRST_COMPARED_COLOR);
+        drawTriangleMarker(j, cellHeight - 1, SECOND_COMPARED_COLOR);
+    }
+
+    @Override
+    public void clearComparison() {
+        drawBaseline();
+    }
+
+    @Override
+    public void present() {
+        gc.drawImage(backBuffer, 0, 0);
+    }
+
+    /** Draws a framed bar of the given value sitting on the baseline. */
+    private void drawBarShape(int index, int value, Color color) {
+        fillCells(index, cellHeight - value - 1, 1, value, color);
+    }
+
+    /** Clears a bar column, preserving the baseline row. */
+    private void clearColumn(int index) {
+        clearCells(index, 0, 1, cellHeight - 1);
+    }
+
+    /** Draws the horizontal baseline on which all bars sit. */
+    private void drawBaseline() {
+        fillCells(0, cellHeight - 1, cellWidth, 1, BASELINE_COLOR);
     }
 
     /**
-     * Updates the visual representation by processing one animation frame.
-     * Only processes if iteration or step mode is active.
+     * Fills a region of cells with a framed, spaced rectangle of the given
+     * color. Coordinates and sizes are in cells, not pixels.
      */
-    public void updateRegion() {
-        if (!runningIteration && !runningStep)
-            return;
-        iteration();
-        runningStep = false;
-        gc.drawImage(estadosImage, 0, 0);
-    }
-
-    /**
-     * Processes one iteration of the animation queue.
-     * Executes the current action and removes it when complete.
-     */
-    public void iteration() {
-        if (actionQueue.isEmpty()) {
-            return;
-        }
-        Action action = actionQueue.peek();
-        boolean finished = false;
-        switch (action.getInstruction()) {
-            case SWAP:
-                finished = swap(action);
-                break;
-            case PIVOT:
-                finished = pivot(action);
-                break;
-            case COMPARE:
-                finished = compare(action);
-                break;
-            case REFRESH_RANGE:
-                finished = refreshRange(action);
-                break;
-            default:
-                break;
-        }
-        if (finished) {
-            actionQueue.poll();
-        }
-    }
-
-    /**
-     * Animates a swap operation between two array elements.
-     * The animation includes blinking effects and the actual value swap.
-     * 
-     * @param action the swap action containing the indices to swap
-     * @return true if the animation is complete, false otherwise
-     */
-    private boolean swap(Action action) {
-        // Calculate color based on current stage
-        Color color = calculateStageColor(action.getTotalStages(), action.getStage(), defaultColor);
-        
-        // Perform the actual swap at the midpoint of animation
-        if (action.getStage() == action.getTotalStages() / 2) {
-            int temp = renderArrayOfValues[action.getParam1()];
-            renderArrayOfValues[action.getParam1()] = renderArrayOfValues[action.getParam2()];
-            renderArrayOfValues[action.getParam2()] = temp;
-            // Play sound based on distance between elements
-            int distance = Math.abs(action.getParam2() - action.getParam1());
-            playSwapSound(distance);
-            // Draw both elements that will be swapped
-            clearRectangle(action.getParam1(), 0, 1, cellHeight - 1);
-            clearRectangle(action.getParam2(), 0, 1, cellHeight - 1);
-        }
-
-
-        rectangleToScreen(action.getParam1(), (height / PIXEL_SIZE) -
-                renderArrayOfValues[action.getParam1()] - 1, 1,
-                renderArrayOfValues[action.getParam1()], true, true, color);
-
-
-        rectangleToScreen(action.getParam2(), (height / PIXEL_SIZE) -
-                renderArrayOfValues[action.getParam2()] - 1, 1,
-                renderArrayOfValues[action.getParam2()], true, true, color);
-
-        // System.out.println("Swapping " + action.getParam1() + " with " +
-        // action.getParam2() + " stage:" + stage);
-        return action.endStage();
-    }
-
-
-    private boolean compare(Action action) {
-
-        // delete last triangles
-
-        for (int a = 0; a < cellWidth; a++) {
-            if (a != action.getParam1() && a != action.getParam2())
-                triangleToScreen(a, cellHeight - 1, Color.LIGHTBLUE);
-        }
-
-        if (action.getStage() > 1) {
-            triangleToScreen(action.getParam1(), cellHeight - 1, Color.DARKGREEN);
-            triangleToScreen(action.getParam2(), cellHeight - 1, Color.BLUE);
-        }
-        return action.endStage();
-    }
-
-    /**
-     * Animates the pivot highlighting during QuickSort partitioning.
-     * Alternates between normal and inverted colors to create a flashing effect.
-     * 
-     * @param action the pivot action containing the pivot index
-     * @return true if the animation is complete, false otherwise
-     */
-    private boolean pivot(Action action) {
-        Color color;
-        if (action.getStage() % 2 != 0) {
-            color = defaultColor;
-        } else
-            color = invertedDefaultColor;
-
-        // Clear the rectangle first to avoid overlapping
-        clearRectangle(action.param1, 0, 1, cellHeight - 1);
-        rectangleToScreen(action.param1, (height / Renderer.PIXEL_SIZE) - renderArrayOfValues[action.param1] - 1, 1,
-                renderArrayOfValues[action.param1], true, true, color);
-
-        return action.endStage();
-    }
-
-    /**
-     * Clears a rectangular area by filling it with the background color.
-     * 
-     * @param x       horizontal position in cells
-     * @param y       vertical position in cells
-     * @param rwidth  width in cells
-     * @param rheight height in cells
-     */
-    protected void clearRectangle(int x, int y, int rwidth, int rheight) {
-
-        WritablePixelFormat<ByteBuffer> pixelFormat = PixelFormat.getByteBgraInstance();
-        for (int cy = Math.max(0, y); cy < Math.min(cellHeight, y + rheight); cy++) {
-            for (int cx = Math.max(0, x); cx < Math.min(cellWidth, x + rwidth); cx++) {
-                int screenX = cx * PIXEL_SIZE;
-                int screenY = cy * PIXEL_SIZE;
-
-                for (int py = 0; py < PIXEL_SIZE; py++) {
-                    for (int px = 0; px < PIXEL_SIZE; px++) {
-                        int pos = (py * PIXEL_SIZE + px) * 4;
-
-                        blockBuffer[pos] = (byte) (backGroundColor.getBlue() * 255); // Blue - inner color
-                        blockBuffer[pos + 1] = (byte) (backGroundColor.getGreen() * 255); // Green
-                        blockBuffer[pos + 2] = (byte) (backGroundColor.getRed() * 255); // Red
-                        blockBuffer[pos + 3] = (byte) 255;
-                    }
-                }
-
-                if (screenX + PIXEL_SIZE <= width && screenY + PIXEL_SIZE <= height) {
-                    pixelWriter.setPixels(screenX, screenY, PIXEL_SIZE, PIXEL_SIZE, pixelFormat, blockBuffer, 0,
-                            PIXEL_SIZE * 4);
-                }
-            }
-        }
-    }
-
-    /**
-     * Draws a small triangle marker within a PIXEL_SIZE cell.
-     * Used to indicate elements being compared during sorting visualization.
-     * The triangle is drawn as a pyramid shape pointing upward.
-     * 
-     * @param x     horizontal position in cells
-     * @param y     vertical position in cells
-     * @param color color of the triangle marker
-     */
-    protected void triangleToScreen(int x, int y, Color color) {
-        if (x < 0 || x >= cellWidth || y < 0 || y >= cellHeight)
-            return;
-
-        int screenX = x * PIXEL_SIZE + PIXEL_SIZE / 2;
-        int screenY = y * PIXEL_SIZE;
-
-        int width = 0;
-        for (int row = 1; row < PIXEL_SIZE / 2; row++) {
-            width++;
-
-            for (int col = -width; col <= width; col++) {
-
-                pixelWriter.setColor(screenX + col, screenY + row, color);
-
-            }
-        }
-    }
-
-    /**
-     * Draws a rectangle to the screen using the default color.
-     * 
-     * @param x        horizontal position in cells
-     * @param y        vertical position in cells
-     * @param rwidth   width in cells
-     * @param rheight  height in cells
-     * @param hasFrame whether to draw a frame around the rectangle
-     * @param hasSpace whether to leave spacing around the rectangle
-     */
-    protected void rectangleToScreen(int x, int y, int rwidth, int rheight, boolean hasFrame, boolean hasSpace) {
-        rectangleToScreen(x, y, rwidth, rheight, hasFrame, hasSpace, defaultColor);
-    }
-
-    /**
-     * Draws a rectangle to the screen with specified color and styling options.
-     * 
-     * @param x        horizontal position in cells
-     * @param y        vertical position in cells
-     * @param rwidth   width in cells
-     * @param rheight  height in cells
-     * @param hasFrame whether to draw a frame around the rectangle
-     * @param hasSpace whether to leave spacing around the rectangle
-     * @param color    the color to use for drawing
-     */
-    protected void rectangleToScreen(int x, int y, int rwidth, int rheight, boolean hasFrame, boolean hasSpace,
-            Color color) {
+    private void fillCells(int x, int y, int regionWidth, int regionHeight, Color color) {
         WritablePixelFormat<ByteBuffer> pixelFormat = PixelFormat.getByteBgraInstance();
 
-        for (int cy = Math.max(0, y); cy < Math.min(cellHeight, y + rheight); cy++) {
-            for (int cx = Math.max(0, x); cx < Math.min(cellWidth, x + rwidth); cx++) {
-                int screenX = cx * PIXEL_SIZE;
-                int screenY = cy * PIXEL_SIZE;
+        for (int cy = Math.max(0, y); cy < Math.min(cellHeight, y + regionHeight); cy++) {
+            for (int cx = Math.max(0, x); cx < Math.min(cellWidth, x + regionWidth); cx++) {
+                int screenX = cx * pixelSize;
+                int screenY = cy * pixelSize;
 
                 boolean leftBorder = (cx == x);
-                boolean rightBorder = (cx == x + rwidth - 1);
+                boolean rightBorder = (cx == x + regionWidth - 1);
                 boolean topBorder = (cy == y);
-                boolean bottomBorder = (cy == y + rheight - 1);
+                boolean bottomBorder = (cy == y + regionHeight - 1);
 
-                // Clear the entire block first
-                // The Alpha is 0 is not going to draw
+                // Transparent buffer: pixels left at alpha 0 are not painted
                 Arrays.fill(blockBuffer, (byte) 0);
 
-                int startPx = (hasSpace && leftBorder) ? 1 : 0;
-                // int endPx = (hasSpace && rightBorder) ? PIXEL_SIZE - 1 : PIXEL_SIZE;
-                int endPx = PIXEL_SIZE;
+                // Leave a one-pixel gap on the left and bottom for spacing
+                int startPx = leftBorder ? 1 : 0;
+                int endPx = pixelSize;
                 int startPy = 0;
-                int endPy = (hasSpace && bottomBorder) ? PIXEL_SIZE - 1 : PIXEL_SIZE;
+                int endPy = bottomBorder ? pixelSize - 1 : pixelSize;
 
                 for (int py = startPy; py < endPy; py++) {
                     for (int px = startPx; px < endPx; px++) {
-                        int pos = (py * PIXEL_SIZE + px) * 4;
+                        int pos = (py * pixelSize + px) * 4;
 
-                        if (!(hasFrame &&
-                                ((leftBorder && px == startPx) ||
-                                        (rightBorder && px == endPx - 1) ||
-                                        (topBorder && py == startPy) ||
-                                        (bottomBorder && py == endPy - 1)))) {
-                            blockBuffer[pos] = (byte) (color.getBlue() * 255); // Blue - inner color
-                            blockBuffer[pos + 1] = (byte) (color.getGreen() * 255); // Green
-                            blockBuffer[pos + 2] = (byte) (color.getRed() * 255); // Red
+                        boolean isFrame = (leftBorder && px == startPx)
+                                || (rightBorder && px == endPx - 1)
+                                || (topBorder && py == startPy)
+                                || (bottomBorder && py == endPy - 1);
+                        if (!isFrame) {
+                            blockBuffer[pos] = (byte) (color.getBlue() * 255);
+                            blockBuffer[pos + 1] = (byte) (color.getGreen() * 255);
+                            blockBuffer[pos + 2] = (byte) (color.getRed() * 255);
                         }
                         blockBuffer[pos + 3] = (byte) 255;
                     }
                 }
 
-                if (screenX + PIXEL_SIZE <= width && screenY + PIXEL_SIZE <= height) {
-                    pixelWriter.setPixels(screenX, screenY, PIXEL_SIZE, PIXEL_SIZE,
-                            pixelFormat, blockBuffer, 0, PIXEL_SIZE * 4);
+                if (screenX + pixelSize <= width && screenY + pixelSize <= height) {
+                    pixelWriter.setPixels(screenX, screenY, pixelSize, pixelSize,
+                            pixelFormat, blockBuffer, 0, pixelSize * 4);
+                }
+            }
+        }
+    }
+
+    /** Fills a region of cells with the background color. */
+    private void clearCells(int x, int y, int regionWidth, int regionHeight) {
+        WritablePixelFormat<ByteBuffer> pixelFormat = PixelFormat.getByteBgraInstance();
+
+        Arrays.fill(blockBuffer, (byte) 255);
+        for (int pos = 0; pos < blockBuffer.length; pos += 4) {
+            blockBuffer[pos] = (byte) (backgroundColor.getBlue() * 255);
+            blockBuffer[pos + 1] = (byte) (backgroundColor.getGreen() * 255);
+            blockBuffer[pos + 2] = (byte) (backgroundColor.getRed() * 255);
+            blockBuffer[pos + 3] = (byte) 255;
+        }
+
+        for (int cy = Math.max(0, y); cy < Math.min(cellHeight, y + regionHeight); cy++) {
+            for (int cx = Math.max(0, x); cx < Math.min(cellWidth, x + regionWidth); cx++) {
+                int screenX = cx * pixelSize;
+                int screenY = cy * pixelSize;
+                if (screenX + pixelSize <= width && screenY + pixelSize <= height) {
+                    pixelWriter.setPixels(screenX, screenY, pixelSize, pixelSize,
+                            pixelFormat, blockBuffer, 0, pixelSize * 4);
                 }
             }
         }
     }
 
     /**
-     * Restarts the visualization by stopping any ongoing animation.
-     * Resets the animation state to allow for a fresh start.
+     * Draws a small upward-pointing triangle marker inside a cell, used to
+     * indicate elements being compared.
      */
-    public void restart() {
-
-        actionQueue.clear();
-        runningIteration = false;
-    }
-
-    /**
-     * Activates continuous iteration mode.
-     * When active, the visualization will continuously process animation actions.
-     */
-    public void iterate() {
-        runningIteration = true;
-    }
-
-    /**
-     * Stops the continuous iteration mode.
-     * When stopped, the visualization will pause and wait for manual control.
-     */
-    public void stopIteration() {
-        runningIteration = false;
-    }
-
-    /**
-     * Performs a single animation step.
-     * Useful for debugging or educational purposes to observe each operation
-     * individually.
-     */
-    public void step() {
-        runningStep = true;
-    }
-
-    /**
-     * Creates an inverted version of the given color.
-     * 
-     * @param color the original color
-     * @return a new color with inverted RGB values
-     */
-    private Color invertColor(Color color) {
-        return new Color(1 - color.getRed(), 1 - color.getGreen(), 1 - color.getBlue(), color.getOpacity());
-    }
-
-    /**
-     * Creates a lighter version of the given color by blending with white.
-     * 
-     * @param color the original color
-     * @return a new color that is 50% lighter
-     */
-    private Color lightColor(Color color) {
-        double red = color.getRed() + (1 - color.getRed()) / 2;
-        double green = color.getGreen() + (1 - color.getGreen()) / 2;
-        double blue = color.getBlue() + (1 - color.getBlue()) / 2;
-
-        return new Color(red, green, blue, 1);
-    }
-
-    /**
-     * Creates a darker version of the given color by blending with white.
-     * 
-     * @param color the original color
-     * @return a new color that is 50% lighter
-     */
-    private Color darkColor(Color color) {
-        double red = color.getRed() / 2;
-        double green = color.getGreen() / 2;
-        double blue = color.getBlue() / 2;
-
-        return new Color(red, green, blue, 1);
-    }
-
-    /**
-     * Calculates the color for a specific stage of animation based on total stages.
-     * Creates a pulse effect that darkens and then returns to normal.
-     * 
-     * @param totalStages the total number of stages in the animation
-     * @param currentStage the current stage of the animation
-     * @param baseColor the base color to modify
-     * @return the calculated color for this stage
-     */
-    private Color calculateStageColor(int totalStages, int currentStage, Color baseColor) {
-        // At the beginning or end of animation, return the default color
-        if (currentStage == totalStages || currentStage == 1) {
-            return baseColor;
-        }
-        
-        // Calculate the progress of the animation (0 to 1)
-        double progress = (double)(totalStages - currentStage) / totalStages;
-        
-        // Create a smooth transition that goes from 0 to 1 and back to 0
-        // This creates a pulse effect that darkens and then returns to normal
-        double pulseProgress;
-        if (progress <= 0.5) {
-            // First half: go from 0 to 1 (darken)
-            pulseProgress = progress * 2;
-        } else {
-            // Second half: go from 1 to 0 (lighten)
-            pulseProgress = (1 - progress) * 2;
-        }
-        
-        // Calculate color adjustment - darken bars during animation
-        double darkenFactor = 0.6 * pulseProgress; // Maximum 70% darkening
-        return new Color(
-            Math.max(0, baseColor.getRed() * (1 - darkenFactor)),
-            Math.max(0, baseColor.getGreen() * (1 - darkenFactor)),
-            Math.max(0, baseColor.getBlue() * (1 - darkenFactor)),
-            baseColor.getOpacity()
-        );
-    }
-
-    /**
-     * Animates a comparison operation between two array elements.
-     * Displays triangular markers below the elements being compared during sorting
-     * algorithms.
-     * Triangles persist until explicitly cleared by other operations.
-     *
-     * @param action the compare action containing the indices being compared
-     * @return true if the animation is complete, false otherwise
-     */
-
-    /**
-     * Plays a sound based on the distance between swapped elements.
-     * Lower frequency (bass) for nearby elements, higher frequency for distant
-     * elements.
-     * The sound is only played if the sound feature is enabled in the main
-     * application.
-     *
-     * @param distance the distance between the swapped elements
-     */
-    private void playSwapSound(int distance) {
-        if (!soundEnabled) {
+    private void drawTriangleMarker(int x, int y, Color color) {
+        if (x < 0 || x >= cellWidth || y < 0 || y >= cellHeight) {
             return;
         }
-        // Calculate frequency based on distance
-        // Bass sound (low frequency) for nearby elements, high pitch for distant
-        // elements
-        // Frequency range from 200Hz (nearby) to 800Hz (distant)
-        int maxDistance = renderArrayOfValues != null ? renderArrayOfValues.length : 50;
-        int frequency = 200 + (600 * Math.min(distance, maxDistance) / Math.max(maxDistance, 1));
 
-        // Generate and play the sound in a separate thread to avoid blocking the UI
-        new Thread(() -> generateTone(frequency, 75)).start();
-    }
+        int screenX = x * pixelSize + pixelSize / 2;
+        int screenY = y * pixelSize;
 
-    /**
-     * Generates and plays a tone with the specified frequency and duration.
-     * Implements smooth start and end to avoid clicking sounds.
-     *
-     * @param frequency the frequency of the tone in Hz
-     * @param duration  the duration of the tone in milliseconds
-     */
-    private void generateTone(int frequency, int duration) {
-        try {
-            // Audio format: 8kHz sample rate, 8-bit samples, mono, signed, little-endian
-            AudioFormat format = new AudioFormat(8000f, 8, 1, true, false);
-            int bufferSize = (int) (duration * 8);
-            byte[] buffer = new byte[bufferSize];
-
-            // Generate sine wave samples with smooth start and end to avoid clicks
-            for (int i = 0; i < buffer.length; i++) {
-                double angle = i / (8000f / frequency) * 2.0 * Math.PI;
-
-                // Apply an envelope to reduce volume and avoid clicks at start/end
-                double envelope;
-                int fadeLength = Math.min(bufferSize / 7, 20); // 20 samples or 1/7th of buffer for fade
-
-                if (i < fadeLength) {
-                    // Fade in
-                    envelope = (double) i / fadeLength;
-                } else if (i > buffer.length - fadeLength) {
-                    // Fade out
-                    envelope = (double) (buffer.length - i) / fadeLength;
-                } else {
-                    // Full volume in the middle
-                    envelope = 1.0;
-                }
-
-                // Reduce overall volume to make it less loud
-                buffer[i] = (byte) (Math.sin(angle) * 60 * envelope); // Reduced from 127 to 60
+        int halfWidth = 0;
+        int rows = Math.max(1, pixelSize / 2 - 1);
+        for (int row = 1; row <= rows; row++) {
+            halfWidth++;
+            for (int col = -halfWidth; col <= halfWidth; col++) {
+                pixelWriter.setColor(screenX + col, screenY + row, color);
             }
-
-            // Play the sound
-            DataLine.Info info = new DataLine.Info(SourceDataLine.class, format);
-            SourceDataLine line = (SourceDataLine) AudioSystem.getLine(info);
-            line.open(format);
-            line.start();
-            line.write(buffer, 0, buffer.length);
-            line.drain();
-            line.close();
-        } catch (LineUnavailableException e) {
-            // If audio is not available, silently continue without sound
-            System.err.println("Audio not available: " + e.getMessage());
         }
     }
 
+    /** @return the color darkened by the given factor in [0, 1] */
+    private static Color darken(Color color, double factor) {
+        if (factor <= 0) {
+            return color;
+        }
+        double scale = 1 - factor;
+        return new Color(color.getRed() * scale, color.getGreen() * scale, color.getBlue() * scale,
+                color.getOpacity());
+    }
 }
